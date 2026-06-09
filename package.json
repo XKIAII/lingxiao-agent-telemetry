@@ -9,7 +9,7 @@
     "status": "node bin/agent-ctl.mjs status",
     "hooks": "node bin/agent-ctl.mjs hooks",
     "logs": "node bin/agent-ctl.mjs logs",
-    "test": "echo \"No tests yet\""
+    "test": "npx tsx test/api.test.ts"
   },
   "type": "module",
   "devDependencies": {
