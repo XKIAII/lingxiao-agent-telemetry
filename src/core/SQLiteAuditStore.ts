@@ -123,18 +123,36 @@ export class SQLiteAuditStore {
     hookCheck?: { passed: boolean; reason?: string };
     user?: string; durationMs?: number;
     tokens?: number; cost?: number; model?: string;
-  }): number {
+  }  ): number {
     const ts = new Date().toISOString()
     const blocked = data.phase === 'pre' && data.hookCheck?.passed === false
     const error = blocked ? data.hookCheck!.reason : (data.result?.error || null)
     const success = !blocked && data.result?.success !== false
-    return this.insertLog({
+    const auditId = this.insertLog({
       timestamp: ts, actionPath: data.actionPath, params: data.params || {},
       result: { success, error }, user: data.user || data.agent || '外部Agent',
       durationMs: data.durationMs || 0,
       hooksTriggered: 1, hooksBlocked: blocked ? 1 : 0,
       tokens: data.tokens || 0, cost: data.cost || 0, model: data.model || '',
     }, `ext-${data.agent}-${Date.now()}`)
+
+    // 记录 Hook 事件（外部遥测也算 Hook 触发）
+    const hookName = blocked ? (data.hookCheck!.reason?.includes('SQL') ? 'SQLInjectionDetector'
+      : data.hookCheck!.reason?.includes('XSS') ? 'XSSDetector'
+      : data.hookCheck!.reason?.includes('路径') ? 'PathTraversalDetector'
+      : data.hookCheck!.reason?.includes('Key') || data.hookCheck!.reason?.includes('敏感') || data.hookCheck!.reason?.includes('密钥') ? 'SecretDetector'
+      : data.hookCheck!.reason?.includes('删除') || data.hookCheck!.reason?.includes('保护') ? 'FileDeleteGuard'
+      : data.hookCheck!.reason?.includes('非法') || data.hookCheck!.reason?.includes('文件名') ? 'FileNameValidator'
+      : data.hookCheck!.reason?.includes('鉴权') || data.hookCheck!.reason?.includes('权限') ? 'GlobalAuthGuard'
+      : 'AuditTrail') : 'AuditTrail'
+
+    this.db.prepare(`
+      INSERT INTO hook_events (audit_id, hook_name, hook_type, priority, action, allowed, reason, timestamp)
+      VALUES (?, ?, 'pre', ?, ?, ?, ?, ?)
+    `).run(auditId, hookName, blocked ? 1 : 10, data.actionPath, blocked ? 0 : 1,
+      blocked ? data.hookCheck!.reason : null, ts)
+
+    return auditId
   }
 
   queryLogs(limit: number = 50, offset: number = 0, hours?: number, agent?: string): AuditEntry[] {
