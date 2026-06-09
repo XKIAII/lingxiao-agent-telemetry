@@ -360,42 +360,78 @@ async function showReport() {
   } catch(e) { console.error(e); }
 }
 
-// ========== 调试回放 ==========
+// ========== 调试回放 (升级版: 回放 + 对比 + Diff) ==========
 
-let debugOps = [], debugIdx = 0, debugTimer = null;
+let debugOps = [], debugIdx = 0, debugTimer = null, debugTab = 'play';
+let compareA = null, compareB = null;
 
 async function showDebugger() {
   try {
-    const r = await fetch(apiUrl('/audit/recent?limit=20'));
-    debugOps = await r.json();
-    debugIdx = 0;
+    const r = await fetch(apiUrl('/audit/recent?limit=30'));
+    debugOps = await r.json(); debugIdx = 0; debugTab = 'play'; compareA = null; compareB = null;
     renderDebugger();
     document.getElementById('modal').classList.add('open');
   } catch(e) { console.error(e); }
 }
 
 function renderDebugger() {
-  if (debugIdx >= debugOps.length) { clearInterval(debugTimer); debugTimer = null; }
-  const o = debugOps[debugIdx] || {};
-  const time = o.timestamp ? new Date(o.timestamp).toLocaleString('zh-CN') : '--';
-  const cls = o.result?.success ? 'var(--green)' : 'var(--red)';
-  const status = o.result?.success ? '成功' : '失败';
+  const tabs = ['play','compare','diff'];
+  const tabNames = {play:'回放',compare:'对比',diff:'Diff'};
+  const tpl = tabs.map(t => `<button class="time-btn" onclick="debugTab='${t}';renderDebugger()" style="${debugTab===t?'border-color:var(--blue);color:var(--blue)':''}">${tabNames[t]}</button>`).join('');
+
+  let body = '';
+  if (debugTab === 'play') {
+    if (debugIdx >= debugOps.length) { clearInterval(debugTimer); debugTimer = null; }
+    const o = debugOps[debugIdx] || {};
+    const time = o.timestamp ? new Date(o.timestamp).toLocaleString('zh-CN') : '--';
+    body = `
+      <div style="display:flex;align-items:center;gap:8px;margin:8px 0">
+        <button class="time-btn" onclick="debugIdx=Math.max(0,debugIdx-1);renderDebugger()">上一步</button>
+        <input type="range" min="0" max="${debugOps.length-1}" value="${debugIdx}" oninput="debugIdx=parseInt(this.value);renderDebugger()" style="flex:1;accent-color:var(--blue)">
+        <button class="time-btn" onclick="debugIdx=Math.min(debugOps.length-1,debugIdx+1);renderDebugger()">下一步</button>
+        <button class="time-btn" onclick="debugTimer=debugTimer?clearInterval(debugTimer):setInterval(()=>{debugIdx++;if(debugIdx>=debugOps.length){clearInterval(debugTimer);debugTimer=null;debugIdx=debugOps.length-1}renderDebugger()},1200);" style="color:${debugTimer?'var(--green)':'var(--text2)'}">${debugTimer?'⏸':'▶'}</button>
+      </div>
+      <div style="margin:6px 0;font-size:11px;color:var(--text2)">${debugIdx+1}/${debugOps.length} — ${time}</div>
+      <div class="field"><div class="key">操作</div><div class="val" style="color:var(--blue);font-size:13px">${o.actionPath||'--'}</div></div>
+      <div class="field"><div class="key">状态</div><div class="val" style="color:${o.result?.success?'var(--green)':'var(--red)'};font-size:13px">${o.result?.success?'成功':'失败'} (${o.durationMs||0}ms)</div></div>
+      <div class="field"><div class="key">用户</div><div class="val">${o.user||'--'} | Hook: ${o.hooksTriggered||0}次</div></div>
+      <div class="field"><div class="key">参数</div><div class="val"><pre style="font-size:11px;max-height:150px;overflow-y:auto">${JSON.stringify(o.params||{},null,2)}</pre></div></div>
+      ${o.result?.error?`<div class="field"><div class="key">错误</div><div class="val" style="color:var(--red)">${o.result.error}</div></div>`:''}
+    `;
+  } else if (debugTab === 'compare') {
+    body = `
+      <div style="display:flex;gap:8px;margin:8px 0">
+        <select onchange="compareA=JSON.parse(this.value);renderDebugger()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:4px;font-size:11px">
+          <option value="">左侧: 点击选择操作</option>
+          ${debugOps.map((o,i)=>`<option value='${JSON.stringify({idx:i,action:o.actionPath,user:o.user,success:o.result.success,params:JSON.stringify(o.params)})}'}>${o.actionPath} ${o.result.success?'OK':'XX'}</option>`).join('')}
+        </select>
+        <select onchange="compareB=JSON.parse(this.value);renderDebugger()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:4px;font-size:11px">
+          <option value="">右侧: 点击选择操作</option>
+          ${debugOps.map((o,i)=>`<option value='${JSON.stringify({idx:i,action:o.actionPath,user:o.user,success:o.result.success,params:JSON.stringify(o.params)})}'}>${o.actionPath} ${o.result.success?'OK':'XX'}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="kpi-card" style="padding:8px"><div class="label">${compareA?compareA.action:'--'}</div><div style="font-size:11px;color:${compareA?.success?'var(--green)':'var(--red)'}">${compareA?compareA.success?'成功':'失败':''}</div><pre style="font-size:10px;max-height:200px;overflow-y:auto">${compareA?compareA.params:'选择左侧操作'}</pre></div>
+        <div class="kpi-card" style="padding:8px"><div class="label">${compareB?compareB.action:'--'}</div><div style="font-size:11px;color:${compareB?.success?'var(--green)':'var(--red)'}">${compareB?compareB.success?'成功':'失败':''}</div><pre style="font-size:10px;max-height:200px;overflow-y:auto">${compareB?compareB.params:'选择右侧操作'}</pre></div>
+      </div>
+    `;
+  } else if (debugTab === 'diff') {
+    const a = compareA?.params || '{}';
+    const b = compareB?.params || '{}';
+    body = `
+      <div style="margin:4px 0;font-size:11px;color:var(--text2)">参数差异对比 (必须先选好对比的两个操作)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;"><div style="font-size:10px;color:var(--text2)">${compareA?.action||'左侧'}</div><pre style="font-size:10px;max-height:250px;overflow-y:auto;color:var(--green)">+ ${a}</pre></div>
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;"><div style="font-size:10px;color:var(--text2)">${compareB?.action||'右侧'}</div><pre style="font-size:10px;max-height:250px;overflow-y:auto;color:var(--red)">- ${b}</pre></div>
+      </div>
+    `;
+  }
+
   document.getElementById('modal-content').innerHTML = `
     <button class="close-btn" onclick="closeModal();clearInterval(debugTimer)">x</button>
-    <h3>调试回放 (${debugIdx+1}/${debugOps.length})</h3>
-    <div style="display:flex;align-items:center;gap:8px;margin:8px 0">
-      <button class="time-btn" onclick="debugIdx=Math.max(0,debugIdx-1);renderDebugger()">上一步</button>
-      <button class="time-btn" onclick="debugIdx=Math.min(debugOps.length-1,debugIdx+1);renderDebugger()">下一步</button>
-      <button class="time-btn" onclick="debugTimer=debugTimer?clearInterval(debugTimer):setInterval(()=>{debugIdx++;if(debugIdx>=debugOps.length){clearInterval(debugTimer);debugTimer=null;debugIdx=debugOps.length-1}renderDebugger()},1500);" style="color:${debugTimer?'var(--green)':'var(--text2)'}">${debugTimer?'暂停自动':'自动播放'}</button>
-      <span style="font-size:11px;color:var(--text2)">${time}</span>
-    </div>
-    <div class="field"><div class="key">操作路径</div><div class="val" style="color:var(--blue);font-size:14px">${o.actionPath||'--'}</div></div>
-    <div class="field"><div class="key">状态</div><div class="val" style="color:${cls};font-size:14px">${status}</div></div>
-    <div class="field"><div class="key">用户</div><div class="val">${o.user||'--'}</div></div>
-    <div class="field"><div class="key">耗时</div><div class="val">${o.durationMs||0}ms</div></div>
-    <div class="field"><div class="key">Hook 触发</div><div class="val">${o.hooksTriggered||0} 次</div></div>
-    <div class="field"><div class="key">参数</div><div class="val"><pre style="font-size:11px;max-height:150px;overflow-y:auto">${JSON.stringify(o.params||{},null,2)}</pre></div></div>
-    ${o.result?.error?`<div class="field"><div class="key">错误</div><div class="val" style="color:var(--red)">${o.result.error}</div></div>`:''}
+    <h3>Agent 调试器</h3>
+    <div style="display:flex;gap:6px;margin:8px 0">${tpl}</div>
+    ${body}
   `;
 }
 
