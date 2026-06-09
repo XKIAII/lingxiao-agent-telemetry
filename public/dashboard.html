@@ -387,7 +387,15 @@ function renderDebugger() {
     body = `
       <div style="display:flex;align-items:center;gap:8px;margin:8px 0">
         <button class="time-btn" onclick="debugIdx=Math.max(0,debugIdx-1);renderDebugger()">上一步</button>
-        <input type="range" min="0" max="${debugOps.length-1}" value="${debugIdx}" oninput="debugIdx=parseInt(this.value);renderDebugger()" style="flex:1;accent-color:var(--blue)">
+        <div style="flex:1;height:28px;background:var(--card);border-radius:4px;overflow:hidden;position:relative" id="timeline-strip">
+          ${debugOps.map((op,i)=>{
+            const l=(i/(debugOps.length-1||1)*100).toFixed(1);
+            const c=op.result?.success?'#4ade80':'#f87171';
+            const sel=i===debugIdx?'box-shadow:0 0 0 2px var(--blue);z-index:1':'';
+            return `<div onclick="debugIdx=${i};renderDebugger()" title="${op.actionPath.replace(/"/g,'&quot;')} — ${new Date(op.timestamp).toLocaleTimeString('zh-CN')}" style="position:absolute;left:${l}%;top:4px;width:6px;height:20px;border-radius:3px;background:${c};cursor:pointer;${sel}"></div>`;
+          }).join('')}
+        </div>
+        <div style="font-size:10px;color:var(--text2);white-space:nowrap;min-width:60px">${o.actionPath}</div>
         <button class="time-btn" onclick="debugIdx=Math.min(debugOps.length-1,debugIdx+1);renderDebugger()">下一步</button>
         <button class="time-btn" onclick="debugTimer=debugTimer?clearInterval(debugTimer):setInterval(()=>{debugIdx++;if(debugIdx>=debugOps.length){clearInterval(debugTimer);debugTimer=null;debugIdx=debugOps.length-1}renderDebugger()},1200);" style="color:${debugTimer?'var(--green)':'var(--text2)'}">${debugTimer?'⏸':'▶'}</button>
       </div>
