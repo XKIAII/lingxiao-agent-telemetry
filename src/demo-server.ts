@@ -100,33 +100,34 @@ core.registerWorker({
   },
 })
 
-// ==================== 运行演示操作（生成遥测数据） ====================
+// ==================== 演示数据生成（已关闭） ====================
+// 使用 --demo 参数开启: npx tsx src/demo-server.ts --demo
+const runDemo = process.argv.includes('--demo')
 
-console.log('\n' + '═'.repeat(50))
-console.log('  🎬 生成遥测数据...')
-console.log('═'.repeat(50))
+if (runDemo) {
+  console.log('\n' + '═'.repeat(50))
+  console.log('  🎬 生成遥测数据...')
+  console.log('═'.repeat(50))
 
-// 正常操作
-console.log('\n▶ 正常操作:')
-await core.dispatch('file-manager.create', { name: 'readme.md', content: '# Hello' })
-await core.dispatch('file-manager.create', { name: 'config.json', content: '{}' })
-await core.dispatch('git-helper.init', { name: 'demo-repo' })
-await core.dispatch('git-helper.commit', { repo: 'demo-repo', message: 'init' })
-await core.dispatch('counter.increment', { step: 1 })
-await core.dispatch('counter.increment', { step: 2 })
-await core.dispatch('counter.get', {})
+  console.log('\n▶ 正常操作:')
+  await core.dispatch('file-manager.create', { name: 'readme.md', content: '# Hello' })
+  await core.dispatch('file-manager.create', { name: 'config.json', content: '{}' })
+  await core.dispatch('git-helper.init', { name: 'demo-repo' })
+  await core.dispatch('git-helper.commit', { repo: 'demo-repo', message: 'init' })
+  await core.dispatch('counter.increment', { step: 1 })
+  await core.dispatch('counter.increment', { step: 2 })
+  await core.dispatch('counter.get', {})
 
-// 被拦截操作
-console.log('\n▶ 被拦截操作（生成错误遥测）:')
-await core.dispatch('file-manager.delete', { name: 'package.json' })
-await core.dispatch('file-manager.create', { name: 'bad??file.txt', content: 'x' })
+  console.log('\n▶ 被拦截操作（生成错误遥测）:')
+  await core.dispatch('file-manager.delete', { name: 'package.json' })
+  await core.dispatch('file-manager.create', { name: 'bad??file.txt', content: 'x' })
 
-// 子智能体并行
-console.log('\n▶ 子智能体:')
-await core.subAgents.executeAll([
-  { id: 'task-1', type: 'analyze', params: {} },
-  { id: 'task-2', type: 'file-scan', params: {} },
-])
+  console.log('\n▶ 子智能体:')
+  await core.subAgents.executeAll([
+    { id: 'task-1', type: 'analyze', params: {} },
+    { id: 'task-2', type: 'file-scan', params: {} },
+  ])
+}
 
 // ==================== 启动 API 服务 ====================
 
