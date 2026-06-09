@@ -128,7 +128,7 @@
   <div class="kpi-card">
     <div class="label" style="color:var(--amber)">累计成本</div>
     <div class="value" style="color:var(--amber)" id="kpi-cost">--</div>
-    <div class="sub">token 消耗 / 费用</div>
+    <div class="sub" id="kpi-cost-sub">token 消耗 / 费用</div>
   </div>
 </div>
 
@@ -228,10 +228,12 @@ function updateKPIs(s, audit, cost) {
   document.getElementById('kpi-success').textContent = s.totalOps>0 ? (s.successOps/s.totalOps*100).toFixed(1)+'%' : '--';
   document.getElementById('kpi-blocked').textContent = s.blockedOps;
   document.getElementById('kpi-latency').textContent = s.avgDurationMs + 'ms';
-  document.getElementById('kpi-cost').textContent = '$' + (cost?.totalCost || '0.00');
+  const hasCost = cost && parseFloat(cost.totalCost) > 0;
+  document.getElementById('kpi-cost').textContent = hasCost ? '$' + cost.totalCost : (cost?.totalCalls ? cost.totalCalls + '次调用' : '--');
+  const costTokens = cost?.totalTokens ? ' / ' + cost.totalTokens + 'tokens' : '';
+  document.getElementById('kpi-cost-sub').textContent = hasCost ? ('token 消耗' + costTokens) : 'API 调用统计';
   const blockedRate = s.totalOps>0 ? (s.blockedOps/s.totalOps*100).toFixed(1) : '0';
   document.getElementById('kpi-blocked-sub').textContent = `拦截率 ${blockedRate}%`;
-}
 
 let hookNameMap = { AuditTrail:'审计追踪', FileDeleteGuard:'文件删除防护', FileNameValidator:'文件名校验', GlobalAuthGuard:'全局鉴权', NotificationHook:'删除通知', PluginCounterAudit:'插件审计', SecretDetector:'敏感信息检测', SQLInjectionDetector:'SQL注入检测', XSSDetector:'XSS防护', PathTraversalDetector:'路径防护' };
 function hookCN(name) { return hookNameMap[name] || name; }
