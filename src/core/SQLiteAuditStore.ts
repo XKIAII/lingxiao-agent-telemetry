@@ -195,7 +195,7 @@ export class SQLiteAuditStore {
   getTimeline(hours?: number, agent?: string): any[] {
     const filter = this.allFilters(hours, agent)
     const rows = this.db.prepare(`
-      SELECT substr(timestamp, 12, 5) as minute, COUNT(*) as total,
+      SELECT substr(datetime(timestamp, '+8 hours'), 12, 5) as minute, COUNT(*) as total,
         SUM(CASE WHEN success=1 THEN 1 ELSE 0 END) as success,
         SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) as failed
       FROM audit_logs WHERE ${filter} GROUP BY minute ORDER BY minute
@@ -224,7 +224,7 @@ export class SQLiteAuditStore {
       GROUP BY model ORDER BY cost DESC
     `).all() as any[]
     const hourly = this.db.prepare(`
-      SELECT substr(timestamp, 12, 5) as minute, SUM(cost) as cost, SUM(tokens) as tokens
+      SELECT substr(datetime(timestamp, '+8 hours'), 12, 5) as minute, SUM(cost) as cost, SUM(tokens) as tokens
       FROM audit_logs WHERE ${filter}
       GROUP BY minute ORDER BY minute
     `).all() as any[]
