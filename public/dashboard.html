@@ -94,6 +94,8 @@
   <button class="time-btn active" onclick="setRange(0)">All</button>
   <button class="time-btn" onclick="setRange(1)">1h</button>
   <button class="time-btn" onclick="setRange(24)">24h</button>
+  <button class="time-btn" onclick="setRange(168)">7d</button>
+  <button class="time-btn" onclick="setRange(720)">30d</button>
   <span style="font-size:11px;color:var(--text2);margin:0 4px">Agent:</span>
   <select id="agent-select" onchange="setAgent(this.value)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:11px;">
     <option value="">全部</option>
@@ -138,8 +140,19 @@
     <div class="chart-inner" id="chart-timeline-bar"></div>
   </div>
   <div class="chart-box">
+    <div class="title">模型 Token 分布</div>
+    <div class="chart-inner" id="chart-model"></div>
+  </div>
+</div>
+
+<div class="charts-row">
+  <div class="chart-box">
     <div class="title">Hook 触发统计（真实数据）</div>
     <div class="chart-inner" id="chart-hooks"></div>
+  </div>
+  <div class="chart-box">
+    <div class="title">Agent 调用排名</div>
+    <div class="chart-inner" id="chart-agent-rank"></div>
   </div>
 </div>
 
@@ -160,7 +173,7 @@
 
 <script>
 const API = 'http://localhost:3000/api';
-let timelineChart, hookChart;
+let timelineChart, hookChart, modelChart, agentRankChart;
 let currentHours = 0;
 let currentAgent = '';
 let authToken = '';
@@ -168,7 +181,12 @@ let authToken = '';
 function initCharts() {
   timelineChart = echarts.init(document.getElementById('chart-timeline-bar'));
   hookChart = echarts.init(document.getElementById('chart-hooks'));
-  window.addEventListener('resize', () => { timelineChart?.resize(); hookChart?.resize(); });
+  modelChart = echarts.init(document.getElementById('chart-model'));
+  agentRankChart = echarts.init(document.getElementById('chart-agent-rank'));
+  window.addEventListener('resize', () => {
+    timelineChart?.resize(); hookChart?.resize();
+    modelChart?.resize(); agentRankChart?.resize();
+  });
 }
 
 function initAuth() {
@@ -187,7 +205,16 @@ function setAgent(agent){currentAgent=agent;refresh();}
 async function loadAgents(){try{const r=await fetch(apiUrl('/agents'));const agents=await r.json();const sel=document.getElementById('agent-select');agents.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;sel.appendChild(o)})}catch(e){}}
 function setRange(hours) {
   currentHours = hours;
-  document.querySelectorAll('.time-btn').forEach(b => b.classList.toggle('active', parseInt(b.textContent) === (hours||0) || (hours===0&&b.textContent==='All') || (hours===1&&b.textContent==='1h') || (hours===24&&b.textContent==='24h')));
+  const btnLabels = { 0:'All', 1:'1h', 24:'24h', 168:'7d', 720:'30d' };
+  document.querySelectorAll('.time-btn').forEach(b => {
+    const lbl = b.textContent.trim();
+    const isActive = (hours === 0 && lbl === 'All')
+      || (hours === 1 && lbl === '1h')
+      || (hours === 24 && lbl === '24h')
+      || (hours === 168 && lbl === '7d')
+      || (hours === 720 && lbl === '30d');
+    b.classList.toggle('active', isActive);
+  });
   refresh();
 }
 
@@ -208,6 +235,8 @@ async function refresh() {
 
     updateKPIs(stats, auditData, costData);
     updateTimelineBar(timeline);
+    updateModelChart(stats);
+    updateAgentRankChart(stats);
     updateHookChart(hookStats);
     updateLogStream(auditData);
     updateBlocks(hookStats);
@@ -228,10 +257,11 @@ function updateKPIs(s, audit, cost) {
   document.getElementById('kpi-success').textContent = s.totalOps>0 ? (s.successOps/s.totalOps*100).toFixed(1)+'%' : '--';
   document.getElementById('kpi-blocked').textContent = s.blockedOps;
   document.getElementById('kpi-latency').textContent = s.avgDurationMs + 'ms';
-  const hasCost = cost && parseFloat(cost.totalCost) > 0;
-  document.getElementById('kpi-cost').textContent = hasCost ? '$' + cost.totalCost : (cost?.totalCalls ? cost.totalCalls + '次调用' : '--');
-  const costTokens = cost?.totalTokens ? ' / ' + cost.totalTokens + 'tokens' : '';
-  document.getElementById('kpi-cost-sub').textContent = hasCost ? ('token 消耗' + costTokens) : 'API 调用统计';
+  // 真实的 Token 消耗 — 从 byModel 聚合
+  const totalTokens = (s.byModel||[]).reduce((a,m) => a + (m.tokens||0), 0);
+  const totalCalls = (s.byModel||[]).reduce((a,m) => a + (m.calls||0), 0);
+  document.getElementById('kpi-cost').textContent = totalTokens > 0 ? totalTokens.toLocaleString() + ' tok' : (totalCalls > 0 ? totalCalls + ' 次' : '--');
+  document.getElementById('kpi-cost-sub').textContent = totalTokens > 0 ? `共 ${(s.byModel||[]).length} 个模型` : 'LLM 调用统计';
   const blockedRate = s.totalOps>0 ? (s.blockedOps/s.totalOps*100).toFixed(1) : '0';
   document.getElementById('kpi-blocked-sub').textContent = `拦截率 ${blockedRate}%`;
 }
@@ -285,6 +315,42 @@ function updateHookChart(hs) {
     ],
   };
   hookChart?.setOption(option, true);
+}
+
+function updateModelChart(s) {
+  const data = (s.byModel||[]).filter(m => m.model);
+  if (!data.length) { modelChart?.clear(); return; }
+  const option = {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} tok ({d}%)' },
+    grid: { left: 4, right: 4, top: 8, bottom: 4 },
+    series: [{
+      type: 'pie', radius: ['30%', '70%'], center: ['50%', '55%'],
+      data: data.map(m => ({ name: m.model, value: m.tokens })),
+      label: { color: '#8888a0', fontSize: 10, formatter: '{b}' },
+      itemStyle: { borderRadius: 4 },
+      color: ['#60a5fa','#a78bfa','#fbbf24','#4ade80','#f87171','#fb923c'],
+    }],
+  };
+  modelChart?.setOption(option, true);
+}
+
+function updateAgentRankChart(s) {
+  const data = (s.byAgent||[]).slice(0, 10).reverse();
+  if (!data.length) { agentRankChart?.clear(); return; }
+  const option = {
+    tooltip: { trigger: 'axis', formatter: function(p) {
+      const d = p[0];
+      return `${d.name}<br/>调用: ${d.value} 次<br/>延迟: ${data[d.dataIndex].totalMs || 0}ms`;
+    }},
+    grid: { left: 4, right: 16, top: 8, bottom: 30 },
+    xAxis: { type: 'value', axisLabel: { color: '#8888a0', fontSize: 9 }, splitLine: { lineStyle: { color: '#2d2e3a', type: 'dashed' } } },
+    yAxis: { type: 'category', data: data.map(a => a.agent), axisLabel: { color: '#8888a0', fontSize: 10 } },
+    series: [{
+      type: 'bar', data: data.map(a => a.calls), barWidth: 12,
+      itemStyle: { borderRadius: [0, 4, 4, 0], color: '#a78bfa' },
+    }],
+  };
+  agentRankChart?.setOption(option, true);
 }
 
 function updateLogStream(data) {
@@ -453,33 +519,33 @@ async function showBenchmark() {
     const ap = currentAgent ? `&agent=${currentAgent}` : '';
     const r = await fetch(apiUrl('/stats?hours=24' + (ap ? `&agent=${currentAgent}` : '')));
     const d = await r.json();
-    // 模拟两个 Agent 的对比数据
-    const a1 = { name: currentAgent || '当前Agent', success: d.successOps, total: d.totalOps, blocked: d.blockedOps, latency: d.avgDurationMs };
-    const a2Rate = Math.min(100, d.successOps + Math.floor(Math.random()*10 - 5));
-    const a2 = { name: '对比Agent', success: Math.max(0, a2Rate * (d.totalOps || 1) / 100 | 0), total: d.totalOps || 10, blocked: Math.floor(Math.random()*5), latency: d.avgDurationMs + Math.floor(Math.random()*20 - 10) };
-    const winner = a1.success/a1.total > a2.success/a2.total ? a1.name : a2.name;
+    const agents = (d.byAgent||[]).slice(0, 2);
+    if (agents.length < 2 && agents.length > 0) {
+      // 只有一个 Agent 时，用全部数据作对比
+      agents.push({ agent: '全局平均', calls: d.totalOps, tokens: 0, totalMs: d.avgDurationMs * d.totalOps });
+    }
+    const a1 = agents[0] || { agent: '--', calls: 0, tokens: 0, totalMs: 0 };
+    const a2 = agents[1] || { agent: '--', calls: 0, tokens: 0, totalMs: 0 };
+    const a1Lat = a1.calls > 0 ? Math.round(a1.totalMs / a1.calls) : 0;
+    const a2Lat = a2.calls > 0 ? Math.round(a2.totalMs / a2.calls) : 0;
     document.getElementById('modal-content').innerHTML = `
       <button class="close-btn" onclick="closeModal()">x</button>
       <h3>Agent 评测对比</h3>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0">
-        <div class="kpi-card" style="border-color:var(--blue)"><div class="label" style="color:var(--blue)">${a1.name}</div>
-          <div style="font-size:12px;margin-top:6px">成功率: ${(a1.success/a1.total*100).toFixed(1)}%</div>
-          <div style="font-size:12px">操作: ${a1.total}</div><div style="font-size:12px">拦截: ${a1.blocked}</div>
-          <div style="font-size:12px">延迟: ${a1.latency}ms</div>
+        <div class="kpi-card" style="border-color:var(--blue)"><div class="label" style="color:var(--blue)">${a1.agent}</div>
+          <div style="font-size:12px;margin-top:6px">调用次数: ${a1.calls}</div>
+          <div style="font-size:12px">Token: ${(a1.tokens||0).toLocaleString()}</div>
+          <div style="font-size:12px">平均延迟: ${a1Lat}ms</div>
         </div>
-        <div class="kpi-card" style="border-color:var(--purple)"><div class="label" style="color:var(--purple)">${a2.name}</div>
-          <div style="font-size:12px;margin-top:6px">成功率: ${(a2.success/a2.total*100).toFixed(1)}%</div>
-          <div style="font-size:12px">操作: ${a2.total}</div><div style="font-size:12px">拦截: ${a2.blocked}</div>
-          <div style="font-size:12px">延迟: ${a2.latency}ms</div>
+        <div class="kpi-card" style="border-color:var(--purple)"><div class="label" style="color:var(--purple)">${a2.agent}</div>
+          <div style="font-size:12px;margin-top:6px">调用次数: ${a2.calls}</div>
+          <div style="font-size:12px">Token: ${(a2.tokens||0).toLocaleString()}</div>
+          <div style="font-size:12px">平均延迟: ${a2Lat}ms</div>
         </div>
-      </div>
-      <div style="text-align:center;padding:12px;background:var(--card);border-radius:8px">
-        <div style="font-size:12px;color:var(--text2)">综合胜出</div>
-        <div style="font-size:18px;color:var(--green);font-weight:500">${winner}</div>
       </div>
       <div style="margin-top:12px;font-size:11px;color:var(--text2)">
-        <div>对比维度: 成功率 · 拦截率 · 响应延迟</div>
-        <div style="margin-top:4px">提示: 选择不同 Agent 并在评测对比中查看差异。真实场景下可设置 A/B 分流测试。</div>
+        <div>对比维度: 调用次数 · Token 消耗 · 响应延迟</div>
+        <div style="margin-top:4px">数据来源: 实时统计，按 Agent 名称分组。</div>
       </div>
     `;
     document.getElementById('modal').classList.add('open');

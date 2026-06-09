@@ -131,7 +131,7 @@ if (runDemo) {
 
 // ==================== 启动 API 服务 ====================
 
-const PORT = 3000
+const PORT = parseInt(process.env.PORT || '3000')
 const app = createApiServer(auditStore, core.getHooks(), core)
 
 app.listen(PORT, () => {

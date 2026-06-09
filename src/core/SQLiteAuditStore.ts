@@ -48,6 +48,8 @@ export class SQLiteAuditStore {
       'ALTER TABLE audit_logs ADD COLUMN tokens INTEGER DEFAULT 0',
       'ALTER TABLE audit_logs ADD COLUMN cost REAL DEFAULT 0',
       'ALTER TABLE audit_logs ADD COLUMN model TEXT DEFAULT \'\'',
+      'ALTER TABLE audit_logs ADD COLUMN event_id TEXT DEFAULT \'\'',
+      'ALTER TABLE audit_logs ADD COLUMN response TEXT DEFAULT \'\'',
     ]) { try { this.db.exec(sql) } catch (_) {} }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS hook_events (
@@ -64,6 +66,7 @@ export class SQLiteAuditStore {
     `)
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs(timestamp)`)
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action_path)`)
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_event_id ON audit_logs(event_id)`)
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_hook_name ON hook_events(hook_name)`)
   }
 
@@ -87,8 +90,12 @@ export class SQLiteAuditStore {
       .run(auditId, hookName, hookType, priority, action, allowed ? 1 : 0, reason || null, new Date().toISOString())
   }
 
-  // 获取时间过滤条件
-  private timeFilter(hours?: number): string {
+  // 获取时间过滤条件 — 支持 hours 和 days 两种模式
+  private timeFilter(hours?: number, days?: number): string {
+    if (days) {
+      const since = new Date(Date.now() - days * 86400 * 1000).toISOString()
+      return `timestamp >= '${since}'`
+    }
     if (!hours) return '1=1'
     const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
     return `timestamp >= '${since}'`
@@ -96,11 +103,14 @@ export class SQLiteAuditStore {
 
   private agentFilter(agent?: string): string {
     if (!agent) return '1=1'
-    return `session_id LIKE 'ext-${agent}-%' OR session_id LIKE 'ext-${agent}'`
+    // 兼容两种 session_id 格式：
+    //   insertPre: 'ext-{agent}'（无后缀）
+    //   insertLog: 'ext-{agent}-{timestamp}'（有后缀）
+    return `(session_id LIKE 'ext-${agent}-%' OR session_id = 'ext-${agent}')`
   }
 
-  private allFilters(hours?: number, agent?: string): string {
-    return `${this.timeFilter(hours)} AND ${this.agentFilter(agent)}`
+  private allFilters(hours?: number, days?: number, agent?: string): string {
+    return `${this.timeFilter(hours, days)} AND ${this.agentFilter(agent)}`
   }
 
   // 获取所有已注册的 Agent 列表
@@ -114,6 +124,51 @@ export class SQLiteAuditStore {
       if (m) agents.add(m[1])
     }
     return [...agents]
+  }
+
+  // 写入 Pre 事件（LLM 调用前），返回 event_id
+  insertPre(data: {
+    agent: string; model?: string; messages?: any[]; timestamp?: string;
+  }): string {
+    const eventId = `pre-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const ts = data.timestamp || new Date().toISOString()
+    this.db.prepare(`
+      INSERT INTO audit_logs
+        (session_id, timestamp, action_path, params, success, error, username, duration_ms, model, event_id)
+      VALUES (?, ?, 'llm/call', ?, 0, NULL, ?, 0, ?, ?)
+    `).run(
+      `ext-${data.agent}`,
+      ts,
+      JSON.stringify({ messages: data.messages || [] }),
+      data.agent,
+      data.model || '',
+      eventId,
+    )
+    return eventId
+  }
+
+  // 写入 Post 事件（LLM 调用后），通过 event_id 关联 Pre 事件
+  updatePost(data: {
+    event_id: string; agent: string; model?: string;
+    response?: any; tokens?: number; cost?: number; timestamp?: string;
+  }): boolean {
+    const pre = this.db.prepare('SELECT timestamp FROM audit_logs WHERE event_id = ?').get(data.event_id) as any
+    if (!pre) return false
+    const preMs = new Date(pre.timestamp).getTime()
+    const postMs = data.timestamp ? new Date(data.timestamp).getTime() : Date.now()
+    const durationMs = Math.max(0, postMs - preMs)
+    const result = this.db.prepare(`
+      UPDATE audit_logs
+      SET response = ?, tokens = ?, cost = ?, duration_ms = ?, success = 1
+      WHERE event_id = ?
+    `).run(
+      JSON.stringify(data.response || {}),
+      data.tokens || 0,
+      data.cost || 0,
+      durationMs,
+      data.event_id,
+    )
+    return result.changes > 0
   }
 
   // 外部遥测上报（来自任意 Agent，如 WorkBuddy / LangChain / CrewAI）
@@ -156,7 +211,7 @@ export class SQLiteAuditStore {
   }
 
   queryLogs(limit: number = 50, offset: number = 0, hours?: number, agent?: string): AuditEntry[] {
-    const filter = this.allFilters(hours, agent)
+    const filter = this.allFilters(hours, undefined, agent)
     const rows = this.db.prepare(
       `SELECT * FROM audit_logs WHERE ${filter} ORDER BY id DESC LIMIT ? OFFSET ?`
     ).all(limit, offset) as any[]
@@ -168,7 +223,7 @@ export class SQLiteAuditStore {
   }
 
   getStats(hours?: number, agent?: string): any {
-    const filter = this.allFilters(hours, agent)
+    const filter = this.allFilters(hours, undefined, agent)
     const total = this.db.prepare(`SELECT COUNT(*) as c FROM audit_logs WHERE ${filter}`).get() as any
     const success = this.db.prepare(`SELECT COUNT(*) as c FROM audit_logs WHERE ${filter} AND success = 1`).get() as any
     const failed = this.db.prepare(`SELECT COUNT(*) as c FROM audit_logs WHERE ${filter} AND success = 0 AND error IS NOT NULL`).get() as any
@@ -179,6 +234,14 @@ export class SQLiteAuditStore {
     const hourly = this.db.prepare(
       `SELECT substr(timestamp, 12, 2) as hour, COUNT(*) as count, SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) as blocked FROM audit_logs WHERE ${filter} GROUP BY hour ORDER BY hour`
     ).all() as any[]
+    const byModel = this.db.prepare(
+      `SELECT model, COUNT(*) as calls, SUM(tokens) as tokens, SUM(duration_ms) as total_ms
+       FROM audit_logs WHERE ${filter} AND model != '' GROUP BY model ORDER BY calls DESC`
+    ).all() as any[]
+    const byAgent = this.db.prepare(
+      `SELECT username, COUNT(*) as calls, SUM(tokens) as tokens, SUM(duration_ms) as total_ms
+       FROM audit_logs WHERE ${filter} AND username IS NOT NULL GROUP BY username ORDER BY calls DESC`
+    ).all() as any[]
 
     return {
       totalOps: total.c,
@@ -188,6 +251,8 @@ export class SQLiteAuditStore {
       avgDurationMs: Math.round(avgDur.avg || 0),
       topActions: topActions.map((r: any) => ({ action: r.action, count: r.count, fails: r.fails })),
       hourlyBreakdown: hourly.map((r: any) => ({ hour: `${r.hour}:00`, count: r.count, blocked: r.blocked })),
+      byModel: byModel.map((r: any) => ({ model: r.model, calls: r.calls, tokens: r.tokens, totalMs: r.total_ms })),
+      byAgent: byAgent.map((r: any) => ({ agent: r.username, calls: r.calls, tokens: r.tokens, totalMs: r.total_ms })),
     }
   }
 
@@ -211,7 +276,7 @@ export class SQLiteAuditStore {
 
   // 按分钟聚合的时间线（用于折线图）
   getTimeline(hours?: number, agent?: string): any[] {
-    const filter = this.allFilters(hours, agent)
+    const filter = this.allFilters(hours, undefined, agent)
     const rows = this.db.prepare(`
       SELECT substr(datetime(timestamp, '+8 hours'), 12, 5) as minute, COUNT(*) as total,
         SUM(CASE WHEN success=1 THEN 1 ELSE 0 END) as success,
@@ -230,7 +295,7 @@ export class SQLiteAuditStore {
 
   // 成本摘要
   getCostSummary(hours?: number, agent?: string): any {
-    const filter = this.allFilters(hours, agent)
+    const filter = this.allFilters(hours, undefined, agent)
     const row = this.db.prepare(`
       SELECT SUM(tokens) as totalTokens, SUM(cost) as totalCost, COUNT(*) as calls,
         AVG(cost) as avgCost
@@ -256,9 +321,27 @@ export class SQLiteAuditStore {
     }
   }
 
+  // 按 Agent 维度的成本统计
+  getCostByAgent(hours?: number, agent?: string): any {
+    const filter = this.allFilters(hours, undefined, agent)
+    const rows = this.db.prepare(`
+      SELECT username as agent, SUM(tokens) as tokens, SUM(cost) as cost, COUNT(*) as calls,
+        AVG(duration_ms) as avgDuration
+      FROM audit_logs WHERE ${filter} AND username IS NOT NULL
+      GROUP BY username ORDER BY cost DESC
+    `).all() as any[]
+    return rows.map((r: any) => ({
+      agent: r.agent,
+      tokens: r.tokens || 0,
+      cost: (r.cost || 0).toFixed(4),
+      calls: r.calls,
+      avgDurationMs: Math.round(r.avgDuration || 0),
+    }))
+  }
+
   // 合规报告
   getComplianceReport(hours?: number, agent?: string): any {
-    const filter = this.allFilters(hours, agent)
+    const filter = this.allFilters(hours, undefined, agent)
     const stats = this.getStats(hours, agent)
     const hookStats = this.getHookStats()
 
