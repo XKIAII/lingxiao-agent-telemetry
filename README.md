@@ -1,60 +1,70 @@
-# 凌霄 — Agent 可观测平台
+# 凌霄 (LingXiao) — Agent 可观测平台
 
-基于 Claude Code 5 层智能体架构的 Agent 安全护栏 + 可观测性产品原型。
+[![Test](https://img.shields.io/badge/test-23/23_passing-brightgreen)](https://github.com/XKIAII/lingxiao-agent-telemetry)
+[![Hooks](https://img.shields.io/badge/hooks-10_online-blue)](https://github.com/XKIAII/lingxiao-agent-telemetry)
+[![License](https://img.shields.io/badge/license-Proprietary-red)](https://github.com/XKIAII/lingxiao-agent-telemetry)
 
-## 5 层架构
+> Agent 安全护栏 + 可观测性中间件。10 个安全 Hook，15 条攻击向量，四象限产品矩阵。
+
+## 为什么
+
+Agent 生态正在从"能跑就行"过渡到"安全可靠"。但现有的 APM 工具不懂 Agent 语义，LangSmith 只管 LLM 调用链——**Agent 的每一步操作，谁来监控？谁来拦截？**
+
+凌霄正好卡在这个转折点上——在 Agent 的每个操作前后插入 Hook，实时检查、实时拦截、实时审计。
+
+## 架构
 
 ```
-记忆层 (CLAUDE.md)     ConfigRegistry + RuleEngine
-知识层 (SKILLS)        SkillRegistry — 可复用能力单元
-护栏层 (HOOKS)         HookManager — Pre/Post 拦截器
-委派层 (子智能体)       SubAgentManager — 并行任务分发
-分发层 (插件/MCP)       PluginManager — 第三方集成
+┌────────────────────────────────────────┐
+│  记忆层    ConfigRegistry + RuleEngine │
+│  知识层    SkillRegistry (可复用能力)  │
+│  护栏层    HookManager (10 个Hook)     │ ← 安全交汇点
+│  委派层    SubAgentManager (并行分发)  │
+│  分发层    PluginManager (MCP/插件)    │
+└────────────────────────────────────────┘
 ```
 
 ## 快速开始
 
 ```bash
-# 1. 启动遥测服务
-npm install
-npm start
-
-# 2. 打开 Dashboard
-open http://localhost:3000/dashboard.html
-
-# 3. 运行安全红队测试 (生成演示数据)
-cd python-sdk
-python red_team.py
+git clone https://github.com/XKIAII/lingxiao-agent-telemetry.git
+cd agent-core-demo
+npm install && npm start
 ```
 
-## Dashboard 功能
+打开 http://localhost:3000/dashboard.html
 
-- **KPI 面板**：总操作数、成功率、Hook 拦截数、平均延迟
-- **操作时序图**：按分钟聚合，成功/失败分色叠柱
-- **Hook 触发统计**：每个 Hook 的触发次数和拦截次数
-- **实时审计日志**：点击行查看完整 params/result
-- **最近拦截记录**：被拦截的操作及原因
-- **告警横幅**：拦截率超标时红色告警
-- **时间范围选择**：All / 1h / 24h
-- **多 Agent 筛选**：按 Agent 来源过滤数据
+```bash
+# 生成演示数据
+cd python-sdk && python red_team.py
 
-## API 端点
+# LangChain Agent 模拟
+python langchain_demo.py
+```
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/stats?hours=&agent=` | 统计摘要 |
-| GET | `/api/audit?limit=&offset=&hours=&agent=` | 审计日志 |
-| GET | `/api/audit/recent?limit=&agent=` | 最近操作 |
-| GET | `/api/audit/:id` | 单条详情 |
-| GET | `/api/timeline?hours=&agent=` | 时序数据 |
-| GET | `/api/hook-stats` | Hook 统计 |
-| GET | `/api/hooks` | Hook 清单 |
-| GET | `/api/hooks-config` | 规则配置 |
-| POST | `/api/hooks-config` | 修改规则 |
-| POST | `/api/hooks-config/reload` | 重载规则 |
-| GET | `/api/agents` | Agent 列表 |
-| GET | `/api/alerts` | 告警状态 |
-| POST | `/api/telemetry/report` | 外部遥测上报 |
+## 四象限
+
+| 工具 | 谁用 | 做什么 |
+|------|------|--------|
+| 📊 **监控台** | 运维 | 实时面板 · KPI 卡片 · 告警推送 · 成本追踪 |
+| 🛡 **安全中心** | IT 安全 | 10 个 Hook 护栏 · 红队引擎 · 合规报告 |
+| 🔧 **调试器** | 开发者 | 单步回放 · 操作对比 · Diff 差异视图 |
+| 📈 **评测基准** | 产品经理 | Agent A/B 对比 · 安全评分 |
+
+## 安全护栏 (10 Hooks)
+
+```
+P0  FileDeleteGuard      文件删除防护
+P1  SQLInjectionDetector SQL 注入检测
+P1  XSSDetector          XSS 跨站脚本防护
+P1  PathTraversalDetector 路径遍历防护
+P1  SecretDetector       敏感信息检测 (API Key / 密码)
+P1  GlobalAuthGuard      全局用户鉴权
+P1  FileNameValidator    文件名校验
+P2  AuditTrail           全量操作审计追踪
+P2  NotificationHook     文件删除通知
+P2  PluginCounterAudit   插件审计
+```
 
 ## Python SDK
 
@@ -67,84 +77,81 @@ tm = TelemetryMiddleware(endpoint="http://localhost:3000", agent="my-agent")
 @tm.trace(action="llm.chat")
 def chat(prompt): ...
 
-# 上下文管理器
+# 上下文管理器 (自动上报 pre/post + tokens/cost)
 with tm.span("agent.search", params={"query": "..."}):
     results = do_search()
-
-# 直接上报
-tm.client.report_pre("tool.run", {"cmd": "..."})
 ```
 
-## 安全红队
+## API
 
-```bash
-cd python-sdk
-python red_team.py
-```
+| 方法 | 端点 | 用途 |
+|------|------|------|
+| GET | `/api/stats` | 统计摘要 |
+| GET | `/api/audit` | 审计日志 (分页/筛选) |
+| GET | `/api/timeline` | 操作时序 |
+| GET | `/api/hooks` | Hook 清单 |
+| GET | `/api/cost` | 成本摘要 |
+| GET | `/api/compliance/report` | 合规报告 |
+| GET | `/api/agents` | Agent 列表 |
+| GET | `/api/alerts` | 告警状态 |
+| POST | `/api/telemetry/report` | 遥测上报 |
+| POST | `/api/hooks-config` | 规则热修改 |
 
-12 条攻击向量覆盖 5 个类别：文件安全、命令注入、数据泄露、权限提升、资源滥用。自动生成安全评分报告。
+**完整文档**: 见 README 底部 API 详情。
 
 ## 部署
 
-### 直接运行
 ```bash
+# 直接运行
 npm start
-```
 
-### Docker
-```bash
+# Docker
 docker compose up
+
+# CLI 管理
+node bin/agent-ctl.mjs status
+node bin/agent-ctl.mjs hook-off FileDeleteGuard
 ```
 
-### CLI
+## 测试
+
 ```bash
-node bin/agent-ctl.mjs start    # 启动
-node bin/agent-ctl.mjs status   # 状态
-node bin/agent-ctl.mjs hooks    # 规则配置
-node bin/agent-ctl.mjs hook-off FileDeleteGuard  # 禁用 Hook
+npm test  # 23 项 API 集成测试
 ```
 
 ## 环境变量
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `PORT` | 服务端口 | `3000` |
-| `AGENT_TELEMETRY_TOKEN` | API 认证 Token | 空（认证禁用） |
-| `ALERT_WEBHOOK_URL` | 告警 Webhook | 空 |
+| 变量 | 说明 |
+|------|------|
+| `PORT` | 服务端口 (默认 3000) |
+| `AGENT_TELEMETRY_TOKEN` | API 认证 Token |
+| `ALERT_WEBHOOK_URL` | 告警通知 Webhook |
+
+## 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 后端 | TypeScript · Node.js · Express · better-sqlite3 |
+| 前端 | 单文件 HTML · ECharts · 全中文 UI |
+| Python SDK | 纯标准库 (urllib) · 零依赖 |
+| 部署 | Docker · docker compose |
+| 测试 | 23 项集成测试 · npm test |
 
 ## 项目结构
 
 ```
 agent-core-demo/
-├── src/
-│   ├── core/              # 5层引擎
-│   │   ├── ConfigRegistry.ts
-│   │   ├── RuleEngine.ts
-│   │   ├── SkillRegistry.ts
-│   │   ├── HookManager.ts
-│   │   ├── SubAgentManager.ts
-│   │   ├── PluginManager.ts
-│   │   ├── DispatchBus.ts
-│   │   ├── SQLiteAuditStore.ts
-│   │   └── AlertEngine.ts
-│   ├── skills/            # 示例 Skill
-│   ├── hooks/             # 护栏规则
-│   ├── plugins/           # 插件
-│   ├── server.ts          # Express API
-│   └── demo-server.ts     # 启动脚本
-├── public/
-│   └── dashboard.html     # 前端面板
-├── data/
-│   ├── hooks.json         # Hook 规则配置
-│   └── agent-audit.db     # SQLite 数据库
-├── bin/
-│   └── agent-ctl.mjs      # CLI 工具
-├── python-sdk/            # Python SDK
-│   ├── agent_telemetry/
-│   ├── example.py
-│   └── red_team.py
-├── Dockerfile
-└── docker-compose.yml
+├── src/core/          # 5 层引擎 (9 个模块)
+├── src/hooks/         # 护栏规则 (10 个 Hook)
+├── src/server.ts      # Express API (14 端点)
+├── public/            # Dashboard 面板
+├── python-sdk/        # Python 客户端
+│   ├── red_team.py    # 安全红队 (15 攻击向量)
+│   └── langchain_demo.py  # LangChain 集成演示
+├── scripts/           # PPT 生成等工具
+├── test/              # 集成测试
+├── Dockerfile & docker-compose.yml
+└── bin/agent-ctl.mjs  # CLI 工具
 ```
 
 ## License
