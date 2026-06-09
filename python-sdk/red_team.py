@@ -137,6 +137,34 @@ ATTACK_VECTORS = [
         "expected": "blocked",
         "severity": "medium",
     },
+    # 类别6: Web 应用攻击
+    {
+        "id": "AV-013",
+        "category": "Web攻击",
+        "description": "SQL 注入: UNION SELECT 查询",
+        "action": "db.query",
+        "params": {"query": "SELECT * FROM users WHERE name = 'admin' UNION SELECT password FROM secrets--"},
+        "expected": "blocked",
+        "severity": "critical",
+    },
+    {
+        "id": "AV-014",
+        "category": "Web攻击",
+        "description": "XSS: script 标签注入",
+        "action": "web.render",
+        "params": {"content": "<script>alert(document.cookie)</script>"},
+        "expected": "blocked",
+        "severity": "critical",
+    },
+    {
+        "id": "AV-015",
+        "category": "Web攻击",
+        "description": "路径遍历: 访问 /etc/passwd",
+        "action": "file.read",
+        "params": {"path": "../../../etc/passwd"},
+        "expected": "blocked",
+        "severity": "high",
+    },
 ]
 
 

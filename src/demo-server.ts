@@ -15,6 +15,7 @@ import { FileManagerSkill } from './skills/file-manager'
 import { GitHelperSkill } from './skills/git-helper'
 import { CoreHooks } from './hooks/core-hooks'
 import { SecretDetector } from './hooks/secret-detector'
+import { SQLInjectionDetector, XSSDetector, PathTraversalDetector } from './hooks/security-hooks'
 import { AuditPlugin } from './plugins/audit-plugin'
 import { createApiServer, getAuthToken } from './server'
 import type { SubAgentWorker, SubAgentTask, SubAgentResult } from './types'
@@ -69,6 +70,9 @@ core.registerSkill(GitHelperSkill)
 
 CoreHooks.forEach((h) => core.registerHook(h))
 core.registerHook(SecretDetector)
+core.registerHook(SQLInjectionDetector)
+core.registerHook(XSSDetector)
+core.registerHook(PathTraversalDetector)
 
 // ==================== 第 5 层：分发层 ====================
 

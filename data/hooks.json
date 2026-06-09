@@ -1,11 +1,44 @@
 {
   "meta": {
     "version": "1.0",
-    "description": "Agent 可观测 — Hook 护栏规则配置。修改后自动生效（30秒轮询）。"
+    "description": "Agent 可观测 — Hook 护栏规则配置。修改后自动生效。"
   },
   "hooks": {
+    "FileDeleteGuard": {
+      "enabled": true,
+      "description": "P0: 拦截受保护文件的删除操作"
+    },
+    "FileNameValidator": {
+      "enabled": true,
+      "description": "P1: 校验文件名合法性"
+    },
+    "GlobalAuthGuard": {
+      "enabled": true,
+      "description": "P1: 全局用户鉴权"
+    },
     "AuditTrail": {
-      "enabled": true
+      "enabled": true,
+      "description": "P2: 全量操作审计追踪"
+    },
+    "NotificationHook": {
+      "enabled": true,
+      "description": "P2: 文件删除通知"
+    },
+    "SecretDetector": {
+      "enabled": true,
+      "description": "P1: 检测 API Key、密码等敏感信息泄露"
+    },
+    "SQLInjectionDetector": {
+      "enabled": true,
+      "description": "P1: 检测 SQL 注入攻击"
+    },
+    "XSSDetector": {
+      "enabled": true,
+      "description": "P1: 检测 XSS 跨站脚本攻击"
+    },
+    "PathTraversalDetector": {
+      "enabled": true,
+      "description": "P1: 检测路径遍历和敏感路径访问"
     }
   }
 }
