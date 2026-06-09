@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  agent-telemetry:
+    build: .
+    container_name: agent-telemetry
+    ports:
+      - "3000:3000"
+    environment:
+      - AGENT_TELEMETRY_TOKEN=${AGENT_TELEMETRY_TOKEN:-}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

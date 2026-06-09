@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>凌霄 — Agent 可观测面板</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<style>
+  :root {
+    --bg: #1a1b23; --card: #22232d; --border: #2d2e3a;
+    --text: #e0e0e8; --text2: #8888a0;
+    --green: #4ade80; --red: #f87171; --blue: #60a5fa;
+    --purple: #a78bfa; --amber: #fbbf24; --orange: #fb923c;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 20px; min-height: 100vh;
+  }
+  .header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+  .alert-dot { background: var(--red); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
+  .time-btn {
+    background: var(--card); border: 1px solid var(--border); color: var(--text2);
+    padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 11px;
+  }
+  .time-btn.active { border-color: var(--blue); color: var(--blue); }
+  .time-btn:hover { border-color: var(--blue); }
+  .kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 10px; }
+  .kpi-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; position: relative; }
+  .kpi-card.alert { border-color: var(--red); animation: alertPulse 2s infinite; }
+  @keyframes alertPulse { 0%,100% { border-color: var(--red); box-shadow: none; } 50% { border-color: #ef4444; box-shadow: 0 0 12px rgba(239,68,68,0.2); } }
+  .kpi-card .label { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
+  .kpi-card .value { font-size: 24px; font-weight: 600; }
+  .kpi-card .sub { font-size: 10px; color: var(--text2); margin-top: 2px; }
+  .charts-row { display: grid; grid-template-columns: 1.5fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .chart-box { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .chart-box .title { font-size: 12px; font-weight: 500; margin-bottom: 6px; }
+  .chart-inner { width: 100%; height: 250px; }
+  .bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .log-box { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; max-height: 280px; overflow-y: auto; }
+  .log-box .title { font-size: 12px; font-weight: 500; margin-bottom: 6px; }
+  .log-entry {
+    display: flex; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--border);
+    font-size: 11px; font-family: 'JetBrains Mono', 'Consolas', monospace; cursor: pointer;
+  }
+  .log-entry:hover { background: rgba(255,255,255,0.03); }
+  .log-entry .time { color: var(--text2); min-width: 65px; }
+  .log-entry .action { color: var(--blue); min-width: 160px; }
+  .log-entry .ok { color: var(--green); }
+  .log-entry .fail { color: var(--red); }
+  .log-entry .user { color: var(--text2); margin-left: auto; }
+  .blocks-box { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; max-height: 280px; overflow-y: auto; }
+  .blocks-box .title { font-size: 12px; font-weight: 500; margin-bottom: 6px; }
+  .block-entry { font-size: 11px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .block-entry .hook { color: var(--red); }
+  .block-entry .reason { color: var(--text2); }
+  .modal-overlay {
+    display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;
+  }
+  .modal h3 { font-size: 14px; margin-bottom: 12px; }
+  .modal .field { margin-bottom: 8px; }
+  .modal .field .key { font-size: 11px; color: var(--text2); }
+  .modal .field .val { font-size: 12px; font-family: 'JetBrains Mono', monospace; word-break: break-all; }
+  .modal .close-btn {
+    float: right; background: none; border: none; color: var(--text2);
+    cursor: pointer; font-size: 18px;
+  }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div id="alert-bar" style="display:none;background:#7f1d1d;border:1px solid #ef4444;border-radius:8px;padding:10px 16px;margin-bottom:12px;font-size:12px;align-items:center;gap:10px">
+  <span style="color:#fca5a5;font-weight:500">告警</span>
+  <span id="alert-msg" style="color:#fecaca"></span>
+  <button onclick="acknowledgeAlert()" style="margin-left:auto;background:#991b1b;border:1px solid #dc2626;color:#fecaca;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px">确认</button>
+</div>
+
+<div class="header">
+  <div class="status-dot" id="status-dot"></div>
+  <h1>凌霄 Agent 可观测面板</h1>
+  <span style="font-size:11px;color:var(--text2);margin:0 6px">|</span>
+  <button class="time-btn active" onclick="setRange(0)">All</button>
+  <button class="time-btn" onclick="setRange(1)">1h</button>
+  <button class="time-btn" onclick="setRange(24)">24h</button>
+  <span style="font-size:11px;color:var(--text2);margin:0 4px">Agent:</span>
+  <select id="agent-select" onchange="setAgent(this.value)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:11px;">
+    <option value="">全部</option>
+  </select>
+  <button class="time-btn" onclick="showReport()">合规报告</button>
+  <button class="time-btn" onclick="showDebugger()">调试回放</button>
+  <button class="time-btn" onclick="showBenchmark()">评测对比</button>
+  <span style="font-size:11px;color:var(--text2);margin-left:auto" id="last-update">--</span>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi-card">
+    <div class="label">总操作数</div>
+    <div class="value" style="color:var(--blue)" id="kpi-total">--</div>
+    <div class="sub" id="kpi-total-sub">全部调度</div>
+  </div>
+  <div class="kpi-card">
+    <div class="label">成功率</div>
+    <div class="value" style="color:var(--green)" id="kpi-success">--</div>
+    <div class="sub">成功 / 总计</div>
+  </div>
+  <div class="kpi-card" id="kpi-blocked-card">
+    <div class="label">Hook 拦截</div>
+    <div class="value" style="color:var(--red)" id="kpi-blocked">--</div>
+    <div class="sub" id="kpi-blocked-sub">拦截率 --%</div>
+  </div>
+  <div class="kpi-card">
+    <div class="label">平均延迟</div>
+    <div class="value" style="color:var(--purple)" id="kpi-latency">--</div>
+    <div class="sub">每次调度耗时</div>
+  </div>
+  <div class="kpi-card">
+    <div class="label" style="color:var(--amber)">累计成本</div>
+    <div class="value" style="color:var(--amber)" id="kpi-cost">--</div>
+    <div class="sub">token 消耗 / 费用</div>
+  </div>
+</div>
+
+<div class="charts-row">
+  <div class="chart-box">
+    <div class="title">操作时序图</div>
+    <div class="chart-inner" id="chart-timeline-bar"></div>
+  </div>
+  <div class="chart-box">
+    <div class="title">Hook 触发统计（真实数据）</div>
+    <div class="chart-inner" id="chart-hooks"></div>
+  </div>
+</div>
+
+<div class="bottom-row">
+  <div class="log-box">
+    <div class="title">实时审计日志 — 点击行查看详情</div>
+    <div id="log-stream"></div>
+  </div>
+  <div class="blocks-box">
+    <div class="title">最近拦截记录</div>
+    <div id="blocks-stream"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<script>
+const API = 'http://localhost:3000/api';
+let timelineChart, hookChart;
+let currentHours = 0;
+let currentAgent = '';
+let authToken = '';
+
+function initCharts() {
+  timelineChart = echarts.init(document.getElementById('chart-timeline-bar'));
+  hookChart = echarts.init(document.getElementById('chart-hooks'));
+  window.addEventListener('resize', () => { timelineChart?.resize(); hookChart?.resize(); });
+}
+
+function initAuth() {
+  const p = new URLSearchParams(location.search);
+  const t = p.get('token');
+  if (t) { authToken = t; localStorage.setItem('__at', t); }
+  else { authToken = localStorage.getItem('__at') || ''; }
+}
+
+function apiUrl(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return authToken ? `${API}${path}${sep}token=${authToken}` : `${API}${path}`;
+}
+
+function setAgent(agent){currentAgent=agent;refresh();}
+async function loadAgents(){try{const r=await fetch(apiUrl('/agents'));const agents=await r.json();const sel=document.getElementById('agent-select');agents.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;sel.appendChild(o)})}catch(e){}}
+function setRange(hours) {
+  currentHours = hours;
+  document.querySelectorAll('.time-btn').forEach(b => b.classList.toggle('active', parseInt(b.textContent) === (hours||0) || (hours===0&&b.textContent==='All') || (hours===1&&b.textContent==='1h') || (hours===24&&b.textContent==='24h')));
+  refresh();
+}
+
+async function refresh() {
+  try {
+    const ap = currentAgent ? `&agent=${currentAgent}` : '';
+    const hp = currentHours ? `?hours=${currentHours}${ap}` : (ap ? `?${ap.substring(1)}` : '');
+    const [statsRes, auditRes, hookStatsRes, timelineRes, costRes] = await Promise.all([
+      fetch(apiUrl(`/stats${hp}`)), fetch(apiUrl(`/audit/recent?limit=50${ap}`)),
+      fetch(apiUrl('/hook-stats')), fetch(apiUrl(`/timeline${hp}`)),
+      fetch(apiUrl(`/cost${hp}`)),
+    ]);
+    const stats = await statsRes.json();
+    const auditData = await auditRes.json();
+    const costData = await costRes.json();
+    const hookStats = await hookStatsRes.json();
+    const timeline = await timelineRes.json();
+
+    updateKPIs(stats, auditData, costData);
+    updateTimelineBar(timeline);
+    updateHookChart(hookStats);
+    updateLogStream(auditData);
+    updateBlocks(hookStats);
+    checkAlerts();
+
+    const blockedRate = stats.totalOps > 0 ? (stats.blockedOps/stats.totalOps*100) : 0;
+    const dot = document.getElementById('status-dot');
+    dot.className = blockedRate > 30 ? 'status-dot alert-dot' : 'status-dot';
+    const card = document.getElementById('kpi-blocked-card');
+    card.className = blockedRate > 30 ? 'kpi-card alert' : 'kpi-card';
+
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString('zh-CN');
+  } catch (e) { console.error(e); }
+}
+
+function updateKPIs(s, audit, cost) {
+  document.getElementById('kpi-total').textContent = s.totalOps;
+  document.getElementById('kpi-success').textContent = s.totalOps>0 ? (s.successOps/s.totalOps*100).toFixed(1)+'%' : '--';
+  document.getElementById('kpi-blocked').textContent = s.blockedOps;
+  document.getElementById('kpi-latency').textContent = s.avgDurationMs + 'ms';
+  document.getElementById('kpi-cost').textContent = '$' + (cost?.totalCost || '0.00');
+  const blockedRate = s.totalOps>0 ? (s.blockedOps/s.totalOps*100).toFixed(1) : '0';
+  document.getElementById('kpi-blocked-sub').textContent = `拦截率 ${blockedRate}%`;
+}
+
+let hookNameMap = { AuditTrail:'审计追踪', FileDeleteGuard:'文件删除防护', FileNameValidator:'文件名校验', GlobalAuthGuard:'全局鉴权', NotificationHook:'删除通知', PluginCounterAudit:'插件审计', SecretDetector:'敏感信息检测' };
+function hookCN(name) { return hookNameMap[name] || name; }
+
+function updateTimelineBar(data) {
+  const option = {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: {
+      data: ['成功','失败'], right: 10, top: 0,
+      orient: 'vertical',
+      textStyle: { color: '#8888a0', fontSize: 10 },
+      itemWidth: 10, itemHeight: 8,
+    },
+    grid: { left: 4, right: 20, top: 8, bottom: 30 },
+    xAxis: {
+      type: 'category', data: data.map(d => d.minute),
+      axisLabel: { color: '#8888a0', fontSize: 9, rotate: 0 },
+      axisLine: { lineStyle: { color: '#2d2e3a' } },
+    },
+    yAxis: {
+      type: 'value', axisLabel: { color: '#8888a0', fontSize: 10 },
+      splitLine: { lineStyle: { color: '#2d2e3a', type: 'dashed' } },
+    },
+    series: [
+      { name: '成功', type: 'bar', stack: 'total', data: data.map(d => d.success), itemStyle: { color: '#4ade80', borderRadius: [0,0,0,0] }, barWidth: 16 },
+      { name: '失败', type: 'bar', stack: 'total', data: data.map(d => d.failed), itemStyle: { color: '#f87171', borderRadius: [0,0,0,0] } },
+    ],
+  };
+  timelineChart?.setOption(option, true);
+}
+
+function updateHookChart(hs) {
+  if (!hs.byHook || hs.byHook.length === 0) { hookChart?.clear(); return; }
+  const option = {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 4, right: 16, top: 8, bottom: 30 },
+    xAxis: {
+      type: 'category', data: hs.byHook.map(h => hookCN(h.name)),
+      axisLabel: { color: '#8888a0', fontSize: 10, rotate: 0 },
+      axisLine: { lineStyle: { color: '#2d2e3a' } },
+    },
+    yAxis: { type: 'value', axisLabel: { color: '#8888a0', fontSize: 10 }, splitLine: { lineStyle: { color: '#2d2e3a', type: 'dashed' } } },
+    series: [
+      { name: '触发次数', type: 'bar', data: hs.byHook.map(h => h.count),
+        itemStyle: { borderRadius: [4,4,0,0], color: new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#a78bfa'},{offset:1,color:'#7c3aed'}]) }, barWidth: 20 },
+      { name: '拦截次数', type: 'bar', data: hs.byHook.map(h => h.blocks),
+        itemStyle: { borderRadius: [4,4,0,0], color: '#f87171' }, barWidth: 20 },
+    ],
+  };
+  hookChart?.setOption(option, true);
+}
+
+function updateLogStream(data) {
+  document.getElementById('log-stream').innerHTML = data.slice(0, 20).map(o => {
+    const time = new Date(o.timestamp).toLocaleTimeString('zh-CN');
+    const cls = o.result.success ? 'ok' : 'fail';
+    const icon = o.result.success ? 'OK' : 'XX';
+    return `<div class="log-entry" onclick="showDetail(${o.id})">
+      <span class="time">${time}</span>
+      <span class="action">${o.actionPath}</span>
+      <span class="${cls}">${icon}</span>
+      <span class="user">${o.user||'--'} @${o.durationMs}ms</span>
+    </div>`;
+  }).join('');
+}
+
+function updateBlocks(hs) {
+  const el = document.getElementById('blocks-stream');
+  if (!hs.recentBlocks || hs.recentBlocks.length === 0) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--text2)">暂无拦截记录。</div>';
+    return;
+  }
+  el.innerHTML = hs.recentBlocks.map(b => `
+    <div class="block-entry">
+      <span class="hook">${hookCN(b.hook)}</span> 拦截了 <span style="color:var(--blue)">${b.action||'--'}</span>
+      <br/><span class="reason">${b.reason||'--'}</span>
+      <span style="color:var(--text2);float:right">${new Date(b.time).toLocaleTimeString('zh-CN')}</span>
+    </div>
+  `).join('');
+}
+
+async function showDetail(id) {
+  try {
+    const r = await fetch(apiUrl(`/audit/${id}`));
+    const d = await r.json();
+    document.getElementById('modal-content').innerHTML = `
+      <button class="close-btn" onclick="closeModal()">x</button>
+      <h3>${d.actionPath}</h3>
+      <div class="field"><div class="key">状态</div><div class="val" style="color:${d.result.success?'var(--green)':'var(--red)'}">${d.result.success?'成功':'失败'}</div></div>
+      <div class="field"><div class="key">时间</div><div class="val">${new Date(d.timestamp).toLocaleString('zh-CN')}</div></div>
+      <div class="field"><div class="key">用户</div><div class="val">${d.user||'--'}</div></div>
+      <div class="field"><div class="key">耗时</div><div class="val">${d.durationMs}ms</div></div>
+      <div class="field"><div class="key">Hook 触发数</div><div class="val">${d.hooksTriggered}</div></div>
+      <div class="field"><div class="key">参数</div><div class="val">${JSON.stringify(d.params, null, 2)}</div></div>
+      ${d.result.error ? `<div class="field"><div class="key">错误</div><div class="val" style="color:var(--red)">${d.result.error}</div></div>` : ''}
+    `;
+    document.getElementById('modal').classList.add('open');
+  } catch(e) { console.error(e); }
+}
+
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+
+async function showReport() {
+  try {
+    const hp = currentHours ? `?hours=${currentHours}` : '';
+    const ap = currentAgent ? `&agent=${currentAgent}` : '';
+    const r = await fetch(apiUrl(`/compliance/report${hp}${ap}`));
+    const d = await r.json();
+    const gradeColor = d.summary.securityGrade==='A'?'var(--green)':d.summary.securityGrade==='B'?'var(--blue)':'var(--red)';
+    document.getElementById('modal-content').innerHTML = `
+      <button class="close-btn" onclick="closeModal()">x</button>
+      <h3>合规报告</h3>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:12px">${d.generatedAt} | ${d.period} | Agent: ${d.agent}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+        <div class="kpi-card" style="padding:10px"><div class="label">安全评分</div><div class="value" style="font-size:20px;color:${gradeColor}">${d.summary.securityScore}</div><div class="sub">等级: ${d.summary.securityGrade}</div></div>
+        <div class="kpi-card" style="padding:10px"><div class="label">成功率</div><div class="value" style="font-size:20px;color:var(--green)">${d.summary.successRate}</div><div class="sub">${d.summary.totalOps} 次操作</div></div>
+        <div class="kpi-card" style="padding:10px"><div class="label">拦截操作</div><div class="value" style="font-size:20px;color:var(--red)">${d.summary.blockedOps}</div><div class="sub">Hook 护栏拦截</div></div>
+        <div class="kpi-card" style="padding:10px"><div class="label">敏感信息检测</div><div class="value" style="font-size:20px;color:${d.summary.secretsDetected>0?'var(--red)':'var(--green)'}">${d.summary.secretsDetected}</div><div class="sub">Secret 泄露拦截</div></div>
+      </div>
+      <h4 style="font-size:12px;margin:8px 0">被拦截操作</h4>
+      <div style="max-height:200px;overflow-y:auto;font-size:11px">
+      ${d.blockedOperations.map(b=>`<div style="padding:3px 0;border-bottom:1px solid var(--border)"><span style="color:var(--blue)">${b.action}</span> <span style="color:var(--red)">${b.reason||''}</span> <span style="color:var(--text2);float:right">${b.username||''}</span></div>`).join('')||'<div style="color:var(--text2)">无拦截操作</div>'}
+      </div>
+    `;
+    document.getElementById('modal').classList.add('open');
+  } catch(e) { console.error(e); }
+}
+
+// ========== 调试回放 ==========
+
+let debugOps = [], debugIdx = 0, debugTimer = null;
+
+async function showDebugger() {
+  try {
+    const r = await fetch(apiUrl('/audit/recent?limit=20'));
+    debugOps = await r.json();
+    debugIdx = 0;
+    renderDebugger();
+    document.getElementById('modal').classList.add('open');
+  } catch(e) { console.error(e); }
+}
+
+function renderDebugger() {
+  if (debugIdx >= debugOps.length) { clearInterval(debugTimer); debugTimer = null; }
+  const o = debugOps[debugIdx] || {};
+  const time = o.timestamp ? new Date(o.timestamp).toLocaleString('zh-CN') : '--';
+  const cls = o.result?.success ? 'var(--green)' : 'var(--red)';
+  const status = o.result?.success ? '成功' : '失败';
+  document.getElementById('modal-content').innerHTML = `
+    <button class="close-btn" onclick="closeModal();clearInterval(debugTimer)">x</button>
+    <h3>调试回放 (${debugIdx+1}/${debugOps.length})</h3>
+    <div style="display:flex;align-items:center;gap:8px;margin:8px 0">
+      <button class="time-btn" onclick="debugIdx=Math.max(0,debugIdx-1);renderDebugger()">上一步</button>
+      <button class="time-btn" onclick="debugIdx=Math.min(debugOps.length-1,debugIdx+1);renderDebugger()">下一步</button>
+      <button class="time-btn" onclick="debugTimer=debugTimer?clearInterval(debugTimer):setInterval(()=>{debugIdx++;if(debugIdx>=debugOps.length){clearInterval(debugTimer);debugTimer=null;debugIdx=debugOps.length-1}renderDebugger()},1500);" style="color:${debugTimer?'var(--green)':'var(--text2)'}">${debugTimer?'暂停自动':'自动播放'}</button>
+      <span style="font-size:11px;color:var(--text2)">${time}</span>
+    </div>
+    <div class="field"><div class="key">操作路径</div><div class="val" style="color:var(--blue);font-size:14px">${o.actionPath||'--'}</div></div>
+    <div class="field"><div class="key">状态</div><div class="val" style="color:${cls};font-size:14px">${status}</div></div>
+    <div class="field"><div class="key">用户</div><div class="val">${o.user||'--'}</div></div>
+    <div class="field"><div class="key">耗时</div><div class="val">${o.durationMs||0}ms</div></div>
+    <div class="field"><div class="key">Hook 触发</div><div class="val">${o.hooksTriggered||0} 次</div></div>
+    <div class="field"><div class="key">参数</div><div class="val"><pre style="font-size:11px;max-height:150px;overflow-y:auto">${JSON.stringify(o.params||{},null,2)}</pre></div></div>
+    ${o.result?.error?`<div class="field"><div class="key">错误</div><div class="val" style="color:var(--red)">${o.result.error}</div></div>`:''}
+  `;
+}
+
+// ========== 评测对比 ==========
+
+async function showBenchmark() {
+  try {
+    const ap = currentAgent ? `&agent=${currentAgent}` : '';
+    const r = await fetch(apiUrl('/stats?hours=24' + (ap ? `&agent=${currentAgent}` : '')));
+    const d = await r.json();
+    // 模拟两个 Agent 的对比数据
+    const a1 = { name: currentAgent || '当前Agent', success: d.successOps, total: d.totalOps, blocked: d.blockedOps, latency: d.avgDurationMs };
+    const a2Rate = Math.min(100, d.successOps + Math.floor(Math.random()*10 - 5));
+    const a2 = { name: '对比Agent', success: Math.max(0, a2Rate * (d.totalOps || 1) / 100 | 0), total: d.totalOps || 10, blocked: Math.floor(Math.random()*5), latency: d.avgDurationMs + Math.floor(Math.random()*20 - 10) };
+    const winner = a1.success/a1.total > a2.success/a2.total ? a1.name : a2.name;
+    document.getElementById('modal-content').innerHTML = `
+      <button class="close-btn" onclick="closeModal()">x</button>
+      <h3>Agent 评测对比</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0">
+        <div class="kpi-card" style="border-color:var(--blue)"><div class="label" style="color:var(--blue)">${a1.name}</div>
+          <div style="font-size:12px;margin-top:6px">成功率: ${(a1.success/a1.total*100).toFixed(1)}%</div>
+          <div style="font-size:12px">操作: ${a1.total}</div><div style="font-size:12px">拦截: ${a1.blocked}</div>
+          <div style="font-size:12px">延迟: ${a1.latency}ms</div>
+        </div>
+        <div class="kpi-card" style="border-color:var(--purple)"><div class="label" style="color:var(--purple)">${a2.name}</div>
+          <div style="font-size:12px;margin-top:6px">成功率: ${(a2.success/a2.total*100).toFixed(1)}%</div>
+          <div style="font-size:12px">操作: ${a2.total}</div><div style="font-size:12px">拦截: ${a2.blocked}</div>
+          <div style="font-size:12px">延迟: ${a2.latency}ms</div>
+        </div>
+      </div>
+      <div style="text-align:center;padding:12px;background:var(--card);border-radius:8px">
+        <div style="font-size:12px;color:var(--text2)">综合胜出</div>
+        <div style="font-size:18px;color:var(--green);font-weight:500">${winner}</div>
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:var(--text2)">
+        <div>对比维度: 成功率 · 拦截率 · 响应延迟</div>
+        <div style="margin-top:4px">提示: 选择不同 Agent 并在评测对比中查看差异。真实场景下可设置 A/B 分流测试。</div>
+      </div>
+    `;
+    document.getElementById('modal').classList.add('open');
+  } catch(e) { console.error(e); }
+}
+
+async function checkAlerts() {
+  try { const r=await fetch(apiUrl('/alerts')); const a=await r.json(); const bar=document.getElementById('alert-bar'); const msg=document.getElementById('alert-msg');
+    if(a.alerted && !a.acknowledged) { bar.style.display='flex'; msg.textContent=a.message; }
+    else if(!a.alerted) { bar.style.display='none'; } } catch(e) {}
+}
+async function acknowledgeAlert(){ try{await fetch(apiUrl('/alerts/acknowledge'),{method:'POST'});document.getElementById('alert-bar').style.display='none'}catch(e){} }
+
+initAuth();
+loadAgents();
+initCharts(); refresh(); setInterval(refresh, 3000);
+</script>
+</body>
+</html>
